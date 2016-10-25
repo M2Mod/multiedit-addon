@@ -32,21 +32,34 @@ bl_info = {
 import bpy
 import math
 
-#Create a list to put the names of the selected objects:
-name_list = []
+class MultiEdit_Props(bpy.types.PropertyGroup):
 
-#Create a list to put the names of the duplicated objects:
-duplicated_list = []
+    @classmethod
+    def register(MultiEdit_Props):
+        #Create a list to put the names of the selected objects:
+        MultiEdit_Props.name_list = []
+        #Create a list to put the names of the duplicated objects:
+        MultiEdit_Props.duplicated_list = []
+        #Create a list to put the vertex_groups that need to be maintained:
+        MultiEdit_Props.special_vgroups_list = []
+        #Create a dictionary to put the parents
+        MultiEdit_Props.parents_list = []
 
-#Create a list to put the vertex_groups that need to be maintained:
-special_vgroups_list = []
+        bpy.types.Scene.multiedit_props = bpy.props.PointerProperty(type=MultiEdit_Props,
+            name="MultiEdit Properties",
+            description="MultiEdit Properties")
 
-#Create a dictionary to put the parents
-parents_list = {}
+    @classmethod
+    def unregister(cls):
+        del bpy.types.Scene.multiedit_props
 
 class MultiEdit_Enter(bpy.types.Operator):
     bl_label = "MultiEdit Enter"
     bl_idname = "objects.multiedit_enter_operator"
+
+    @classmethod
+    def poll(cls, context):
+        return len(context.scene.multiedit_props.name_list) == 0
 
     #The main function of the class:
     def execute(self, context):
@@ -69,7 +82,7 @@ class MultiEdit_Enter(bpy.types.Operator):
 
             #If the name_list contains elements, that means that there is
             #at least one more MultiEdit instance.
-            if len(name_list) == 0:
+            if len(bpy.context.scene.multiedit_props.name_list) == 0:
                 self.Create_MultiEdit(new_selected_objects_list)
             else:
                 raise ValueError("A MultiEdit instance is already running!")
@@ -83,16 +96,18 @@ class MultiEdit_Enter(bpy.types.Operator):
         #Create a variable to keep track of the number of objects:
         copied_index = 0
 
+        multiedit_props = bpy.context.scene.multiedit_props
+
         #Iterate through the given objects list:
         for object in objects:
 
             #Append the object's name to the name_list:
-            name_list.append(object.name)
+            multiedit_props.name_list.append(object.name)
 
             #Call the Duplicate_Object function:
             new_object_name = object.name + "_dupl" + str(copied_index)
             self.Duplicate_Object(bpy.context.scene, (new_object_name),object)
-            duplicated_list.append(new_object_name)
+            multiedit_props.duplicated_list.append(new_object_name)
 
             #Increase the copied_index by 1:
             copied_index += 1
@@ -124,11 +139,12 @@ class MultiEdit_Enter(bpy.types.Operator):
 
     def Create_Vertex_Groups(self, object):
 
+        multiedit_props = bpy.context.scene.multiedit_props
         ###Create the necessary vertex groups:###
         bpy.context.scene.objects.active = object
         for vertex_group in object.vertex_groups:
-            special_vgroups_list.append(vertex_group.name) 
-        
+            multiedit_props.special_vgroups_list.append(vertex_group.name)
+
         #Create vertex groups containting all the vertices:
         object.vertex_groups.new(object.name)
         vertex_group = object.vertex_groups[-1]
@@ -199,7 +215,7 @@ class MultiEdit_Enter(bpy.types.Operator):
         
         #Copy parent object value
         try:
-            parents_list[old_object.name] = (old_object.parent).name
+            scene.multiedit_props.parents_list[old_object.name] = (old_object.parent).name
         except:
             pass
         #Finally, return the new object:
@@ -211,17 +227,22 @@ class MultiEdit_Exit(bpy.types.Operator):
     bl_idname = "objects.multiedit_exit_operator"
     bl_context = "editmode"
 
+    @classmethod
+    def poll(cls, context):
+        return len(context.scene.multiedit_props.name_list) > 0
+
     #The main function of the class:
     def execute(self,context):
 
+        multiedit_props = bpy.context.scene.multiedit_props
         #In case that any problems arise, just cancel the MultiEdit:
         try:
             bpy.context.scene.objects.active = bpy.data.objects["MultiEdit"]
         except:
-            del name_list[:]
-            del duplicated_list[:]
-            del special_vgroups_list[:]
-            parents_list.clear()
+            del multiedit_props.name_list[:]
+            del multiedit_props.duplicated_list[:]
+            del multiedit_props.special_vgroups_list[:]
+            multiedit_props.parents_list.clear()
 
         #Create the necessary variables:
         active_object = bpy.context.active_object
@@ -242,10 +263,11 @@ class MultiEdit_Exit(bpy.types.Operator):
             bpy.ops.mesh.select_mode(type="VERT")
             bpy.ops.object.mode_set(mode = 'OBJECT')
 
+            multiedit_props = bpy.context.scene.multiedit_props
             for vert in active_object.data.vertices:
                 for vertGroup in vert.groups:
                     if vertGroup.group == vgroup_index:
-                        if vertex_group.name in special_vgroups_list:
+                        if vertex_group.name in multiedit_props.special_vgroups_list:
                             break
                         else:
                             vert.select = True
@@ -265,6 +287,7 @@ class MultiEdit_Exit(bpy.types.Operator):
 
     def Fix_Objects(self, active_object, name, vgroup_index):
 
+        multiedit_props = bpy.context.scene.multiedit_props
         existing_vg = []
         object_layer = bpy.context.scene.active_layer
         for object in bpy.context.selected_objects:
@@ -280,7 +303,7 @@ class MultiEdit_Exit(bpy.types.Operator):
                     for vertGroup in vert.groups:
                          if vertGroup.group == vgroup_index:
                               vert.select = True
-                              if object.vertex_groups[vgroup_index].name in special_vgroups_list:
+                              if object.vertex_groups[vgroup_index].name in multiedit_props.special_vgroups_list:
                                    pass
                               elif object.vertex_groups[vgroup_index].name in existing_vg:
                                    pass
@@ -293,7 +316,7 @@ class MultiEdit_Exit(bpy.types.Operator):
             if len(existing_vg) < 2 and len(existing_vg) > 0:
                 # try:
                     object.name = existing_vg[0]
-                    wanted_object_name = duplicated_list[(name_list.index(object.name))]
+                    wanted_object_name = multiedit_props.duplicated_list[(multiedit_props.name_list.index(object.name))]
 
                     mats = []
 
@@ -341,13 +364,14 @@ class MultiEdit_Exit(bpy.types.Operator):
         bpy.ops.object.delete()
 
         #Empty lists for future use
-        del name_list[:]
-        del duplicated_list[:]
-        del special_vgroups_list[:]
-        parents_list.clear()
+        del multiedit_props.name_list[:]
+        del multiedit_props.duplicated_list[:]
+        del multiedit_props.special_vgroups_list[:]
+        multiedit_props.parents_list.clear()
 
     def Copy_Data(self, wanted_object_name, object):
 
+        multiedit_props = bpy.context.scene.multiedit_props
         ###All those things copy modifiers, constraints etc. with all properties. Cool...###
         bpy.ops.object.select_all(action = 'DESELECT')
         object.select = True
@@ -376,10 +400,10 @@ class MultiEdit_Exit(bpy.types.Operator):
             
         #Delete unnecessary vertex groups:
         for vg in object.vertex_groups:
-            if vg.name in bpy.data.objects[(duplicated_list[(name_list.index(object.name))])].vertex_groups:
+            if vg.name in bpy.data.objects[(multiedit_props.duplicated_list[(multiedit_props.name_list.index(object.name))])].vertex_groups:
                 pass
             else:
-                object.vertex_groups.remove(vg)     
+                object.vertex_groups.remove(vg)
         
        #Copy constraints:
         for constr in bpy.data.objects[wanted_object_name].constraints:
@@ -394,7 +418,7 @@ class MultiEdit_Exit(bpy.types.Operator):
             for shape_key in object.data.shape_keys.key_blocks:
                  try:
                       bpy.context.scene.objects.active = object
-                      if shape_key.name in bpy.data.objects[(duplicated_list[(name_list.index(object.name))])].data.shape_keys.key_blocks:
+                      if shape_key.name in bpy.data.objects[(multiedit_props.duplicated_list[(multiedit_props.name_list.index(object.name))])].data.shape_keys.key_blocks:
                           pass
                       else:
                           idx = object.data.shape_keys.key_blocks.keys().index(shape_key.name)
@@ -408,11 +432,12 @@ class MultiEdit_Exit(bpy.types.Operator):
             pass
 
     def Preserve_Data(self):
+        multiedit_props = bpy.context.scene.multiedit_props
         #Check if checkbox is true and preserve or not the rotation/scale values of the objects:
         if bpy.context.scene.Preserve_Location_Rotation_Scale:
           for obj in bpy.data.objects:
               self.Preserve_Parents(obj)
-              for nam in name_list:
+              for nam in multiedit_props.name_list:
                 if nam == obj.name:
                     obj.select = True
                     bpy.context.scene.objects.active = obj
@@ -420,7 +445,7 @@ class MultiEdit_Exit(bpy.types.Operator):
                     #Location:
                     bpy.ops.object.origin_set(type="ORIGIN_GEOMETRY")
                     #Rotation:
-                    rotation_values = bpy.data.objects[duplicated_list[name_list.index(nam)]].rotation_euler
+                    rotation_values = bpy.data.objects[multiedit_props.duplicated_list[multiedit_props.name_list.index(nam)]].rotation_euler
 
                     bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
 
@@ -441,7 +466,7 @@ class MultiEdit_Exit(bpy.types.Operator):
                     obj.rotation_euler = (rot)
 
                     #Scale/Dimensions:
-                    scales = bpy.data.objects[duplicated_list[name_list.index(nam)]].scale
+                    scales = bpy.data.objects[multiedit_props.duplicated_list[multiedit_props.name_list.index(nam)]].scale
                     bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
                     bpy.ops.object.mode_set(mode = 'EDIT')
                     bpy.ops.mesh.select_all(action = 'SELECT')
@@ -451,7 +476,7 @@ class MultiEdit_Exit(bpy.types.Operator):
                     bpy.ops.object.mode_set(mode = 'EDIT')
                     bpy.ops.object.mode_set(mode = 'OBJECT')
 
-                    bpy.context.scene.cursor_location = bpy.data.objects[duplicated_list[name_list.index(nam)]].location
+                    bpy.context.scene.cursor_location = bpy.data.objects[multiedit_props.duplicated_list[multiedit_props.name_list.index(nam)]].location
                     bpy.ops.object.origin_set(type="ORIGIN_CURSOR")
 
                     #Deselect object:
@@ -462,7 +487,7 @@ class MultiEdit_Exit(bpy.types.Operator):
         
         else:
           for obj in bpy.data.objects:
-            for nam in name_list:
+            for nam in multiedit_props.name_list:
                 self.Preserve_Parents(obj)
                 if nam in obj.name:
                     obj.select = True
@@ -476,10 +501,10 @@ class MultiEdit_Exit(bpy.types.Operator):
                 else:
                     pass
         
-    #A function to preserve an object's parent:    
+    #A function to preserve an object's parent:
     def Preserve_Parents(self, obj):
         try:
-            obj.parent = bpy.data.objects[parents_list[obj.name]]
+            obj.parent = bpy.data.objects[bpy.context.scene.multiedit_props.parents_list[obj.name]]
         except:
             pass
 
@@ -551,6 +576,7 @@ class MultiEdit_Panel(bpy.types.Panel):
          layout.prop(sce, "Preserve_Location_Rotation_Scale")
 
 def register():
+    bpy.utils.register_class(MultiEdit_Props)
     bpy.utils.register_class(MultiEdit_Enter)
     bpy.utils.register_class(MultiEdit_Exit)
     bpy.utils.register_class(MultiEdit_Panel)
@@ -565,6 +591,7 @@ def unregister():
     bpy.utils.unregister_class(MultiEdit_Enter);
     bpy.utils.unregister_class(MultiEdit_Exit);
     bpy.utils.unregister_class(MultiEdit_Panel);
+    bpy.utils.unregister_class(MultiEdit_Props)
 
 if __name__ == "__main__":
     register()
